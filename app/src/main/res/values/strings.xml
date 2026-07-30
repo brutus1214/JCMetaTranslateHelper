@@ -1,0 +1,5 @@
+<resources>
+    <string name="app_name">JC Meta Translate Helper</string>
+    <string name="accessibility_service_name">Meta Translation Speaker</string>
+    <string name="accessibility_description">Reads only your outgoing translated text from the Meta AI live-translation screen and speaks it through the phone speaker.</string>
+</resources>
