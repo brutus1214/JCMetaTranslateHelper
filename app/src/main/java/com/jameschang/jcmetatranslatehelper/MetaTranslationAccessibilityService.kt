@@ -17,15 +17,18 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
     }
 
     override fun onAccessibilityEvent(event: AccessibilityEvent?) {
-        if (!Preferences.isSpeakEnabled(this)) return
         if (event?.packageName?.toString() != META_VIEW_PACKAGE) return
 
         val root = rootInActiveWindow ?: return
-        val candidate = findNewestOutgoingTranslation(
+        val result = inspectTranslationScreen(
             root = root,
             screenWidth = resources.displayMetrics.widthPixels,
             screenHeight = resources.displayMetrics.heightPixels
-        ) ?: return
+        )
+        Preferences.setDiagnostics(this, result.diagnostics)
+
+        if (!Preferences.isSpeakEnabled(this)) return
+        val candidate = result.candidate ?: return
 
         val normalized = normalize(candidate)
         if (isDuplicate(normalized)) return
@@ -41,15 +44,18 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
      * Filtering happens before choosing the lowest node so a bottom navigation label
      * such as "History" cannot hide the real translated sentence above it.
      */
-    private fun findNewestOutgoingTranslation(
+    private fun inspectTranslationScreen(
         root: AccessibilityNodeInfo,
         screenWidth: Int,
         screenHeight: Int
-    ): String? {
-        val candidates = mutableListOf<Pair<Int, String>>()
+    ): InspectionResult {
+        val candidates = mutableListOf<Candidate>()
+        val visibleNodes = mutableListOf<String>()
 
         fun walk(node: AccessibilityNodeInfo) {
-            val text = normalize(node.text?.toString().orEmpty())
+            val nodeText = node.text?.toString().orEmpty()
+            val description = node.contentDescription?.toString().orEmpty()
+            val text = normalize(nodeText.ifBlank { description })
             if (text.isNotEmpty()) {
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
@@ -59,8 +65,17 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
                 val isControl = node.isClickable || node.isCheckable ||
                     node.className?.toString()?.contains("Button", ignoreCase = true) == true
 
+                visibleNodes += buildString {
+                    append(if (isOutgoing) "R" else "L")
+                    append(" [${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}] ")
+                    append(text.take(160))
+                    node.viewIdResourceName?.let { append(" id=").append(it) }
+                    if (description.isNotBlank()) append(" desc")
+                    if (isControl) append(" control")
+                }
+
                 if (isOutgoing && !isBottomNavigation && !isControl && looksSpeakable(text)) {
-                    candidates += bounds.bottom to text
+                    candidates += Candidate(bounds.bottom, text)
                 }
             }
 
@@ -70,7 +85,14 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
         }
 
         walk(root)
-        return candidates.maxByOrNull { it.first }?.second
+        val selected = candidates.maxByOrNull { it.bottom }?.text
+        val diagnostics = buildString {
+            appendLine("Version 0.2.0")
+            appendLine("Selected: ${selected ?: "none"}")
+            appendLine("Screen: ${screenWidth}x$screenHeight")
+            visibleNodes.takeLast(MAX_DIAGNOSTIC_NODES).forEach(::appendLine)
+        }.trim()
+        return InspectionResult(selected, diagnostics)
     }
 
     private fun normalize(text: String): String =
@@ -103,10 +125,14 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
         private const val OUTGOING_CENTER_THRESHOLD = 0.58
         private const val BOTTOM_NAVIGATION_THRESHOLD = 0.88
         private const val DUPLICATE_WINDOW_MS = 30_000L
+        private const val MAX_DIAGNOSTIC_NODES = 40
         private val UI_LABELS = setOf(
             "live translation", "history", "settings", "pause", "resume", "end",
             "microphone", "english", "spanish", "copy", "share", "back", "close",
             "start", "stop", "cancel", "done", "more options"
         )
     }
+
+    private data class Candidate(val bottom: Int, val text: String)
+    private data class InspectionResult(val candidate: String?, val diagnostics: String)
 }
