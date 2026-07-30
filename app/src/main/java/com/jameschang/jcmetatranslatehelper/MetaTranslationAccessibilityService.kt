@@ -118,7 +118,7 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
         nodes: List<NodeRecord>
     ): TranslationPair? {
         val originalFromMarker = normalize(
-            marker.text.substringAfter(PLAY_TRANSLATION_PREFIX, "")
+            marker.text.drop(PLAY_TRANSLATION_PREFIX.length)
         )
         if (!looksSpeakable(originalFromMarker)) return null
 
