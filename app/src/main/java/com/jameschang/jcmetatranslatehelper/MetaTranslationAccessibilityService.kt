@@ -4,6 +4,7 @@ import android.accessibilityservice.AccessibilityService
 import android.graphics.Rect
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
+import java.util.Locale
 
 class MetaTranslationAccessibilityService : AccessibilityService() {
     private lateinit var speaker: Speaker
@@ -39,9 +40,14 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Meta View exposes each outgoing entry in this order:
-     * "Play translation for You speak", the original sentence, then its translation.
-     * Use that semantic marker instead of guessing from left/right screen position.
+     * Meta exposes a translation entry as:
+     * 1. A content-description button: "Play translation for <original sentence>"
+     * 2. The visible original sentence
+     * 3. The visible translated sentence
+     *
+     * The button is not labelled "You speak", so pair the marker with its two
+     * nearby visible sentences and accept only English-original/Spanish-result
+     * pairs. This prevents the other person's Spanish-original entries speaking.
      */
     private fun inspectTranslationScreen(
         root: AccessibilityNodeInfo,
@@ -74,43 +80,24 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
 
         walk(root)
 
-        val marker = nodes.lastOrNull { isYouSpeakMarker(it.text) }
-        val semanticTexts = marker?.let { newestMarker ->
-            nodes.asSequence()
-                .filter { it.order > newestMarker.order }
-                .filterNot { it.isControl }
-                .map { it.text }
-                .filter(::looksSpeakable)
-                .filterNot(::isYouSpeakMarker)
-                .distinct()
-                .take(2)
-                .toList()
-        }.orEmpty()
-
-        // The first sentence after the marker is what James said; the second is
-        // Meta's translated sentence. Do not speak when both are not available.
-        val semanticSelection = semanticTexts.getOrNull(1)
-        val fallbackSelection = if (marker == null) {
-            nodes.asSequence()
-                .filter { it.bounds.centerX() > screenWidth * OUTGOING_CENTER_THRESHOLD }
-                .filter { it.bounds.top <= screenHeight * BOTTOM_NAVIGATION_THRESHOLD }
-                .filterNot { it.isControl }
-                .filter { looksSpeakable(it.text) }
-                .maxByOrNull { it.bounds.bottom }
-                ?.text
-        } else {
-            null
+        val markers = nodes.filter { isTranslationMarker(it) }
+        val pairs = markers.mapNotNull { marker -> pairForMarker(marker, nodes) }
+        val selectedPair = pairs.lastOrNull { pair ->
+            looksLikeEnglish(pair.original) && looksLikeSpanish(pair.translation)
         }
-        val selected = semanticSelection ?: fallbackSelection
+        val selected = selectedPair?.translation
 
         val diagnostics = buildString {
-            appendLine("Version 0.3.0")
-            appendLine("You-speak marker: ${marker?.text ?: "none"}")
-            appendLine("After marker: ${semanticTexts.joinToString(" | ").ifBlank { "none" }}")
+            appendLine("Version 0.4.0")
+            appendLine("Translation markers: ${markers.size}")
+            appendLine(
+                "Newest pair: " +
+                    (pairs.lastOrNull()?.let { "${it.original} -> ${it.translation}" } ?: "none")
+            )
             appendLine("Selected: ${selected ?: "none"}")
             appendLine("Screen: ${screenWidth}x${screenHeight}")
             nodes.takeLast(MAX_DIAGNOSTIC_NODES).forEach { item ->
-                append(if (isYouSpeakMarker(item.text)) "MARKER" else "NODE")
+                append(if (isTranslationMarker(item)) "MARKER" else "NODE")
                 append(" [${item.bounds.left},${item.bounds.top},${item.bounds.right},${item.bounds.bottom}] ")
                 append(item.text.take(160))
                 if (item.fromDescription) append(" desc")
@@ -122,23 +109,73 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
         return InspectionResult(selected, diagnostics)
     }
 
+    private fun isTranslationMarker(node: NodeRecord): Boolean =
+        node.fromDescription &&
+            node.text.lowercase(Locale.ROOT).startsWith(PLAY_TRANSLATION_PREFIX)
+
+    private fun pairForMarker(
+        marker: NodeRecord,
+        nodes: List<NodeRecord>
+    ): TranslationPair? {
+        val originalFromMarker = normalize(
+            marker.text.substringAfter(PLAY_TRANSLATION_PREFIX, "")
+        )
+        if (!looksSpeakable(originalFromMarker)) return null
+
+        val nextMarkerOrder = nodes.asSequence()
+            .filter { it.order > marker.order && isTranslationMarker(it) }
+            .minOfOrNull { it.order } ?: Int.MAX_VALUE
+
+        val visible = nodes.asSequence()
+            .filter { it.order > marker.order && it.order < nextMarkerOrder }
+            .filterNot { it.isControl || it.fromDescription }
+            .filter { looksSpeakable(it.text) }
+            .toList()
+
+        val originalIndex = visible.indexOfFirst {
+            normalizeForMatch(it.text) == normalizeForMatch(originalFromMarker)
+        }
+        if (originalIndex < 0) return null
+
+        val translation = visible.drop(originalIndex + 1)
+            .firstOrNull { normalizeForMatch(it.text) != normalizeForMatch(originalFromMarker) }
+            ?.text ?: return null
+
+        return TranslationPair(originalFromMarker, translation)
+    }
+
     private fun normalize(text: String): String =
         text.trim().replace(Regex("\\s+"), " ")
 
-    private fun isYouSpeakMarker(text: String): Boolean {
-        val lower = normalize(text).lowercase()
-        return lower.contains(YOU_SPEAK_MARKER) ||
-            (lower.contains("play translation") && lower.contains("you speak"))
-    }
+    private fun normalizeForMatch(text: String): String =
+        normalize(text)
+            .lowercase(Locale.ROOT)
+            .trimEnd('.', '!', '?', '¿', '¡')
 
     private fun looksSpeakable(text: String): Boolean {
         if (text.length < 2 || text.length > 500) return false
         if (text.none { it.isLetter() }) return false
 
-        val lower = text.lowercase()
+        val lower = text.lowercase(Locale.ROOT)
         return UI_LABELS.none { label ->
             lower == label || lower.startsWith("$label ") || lower.endsWith(" $label")
         }
+    }
+
+    private fun looksLikeEnglish(text: String): Boolean {
+        val lower = " ${normalizeForMatch(text)} "
+        if (SPANISH_STRONG_CHARS.any(lower::contains)) return false
+        val englishHits = ENGLISH_WORDS.count { lower.contains(" $it ") }
+        val spanishHits = SPANISH_WORDS.count { lower.contains(" $it ") }
+        return englishHits > spanishHits || spanishHits == 0
+    }
+
+    private fun looksLikeSpanish(text: String): Boolean {
+        val lower = " ${normalizeForMatch(text)} "
+        if (SPANISH_STRONG_CHARS.any(lower::contains)) return true
+        val spanishHits = SPANISH_WORDS.count { lower.contains(" $it ") }
+        val englishHits = ENGLISH_WORDS.count { lower.contains(" $it ") }
+        return spanishHits > englishHits
     }
 
     private fun isDuplicate(text: String): Boolean {
@@ -155,16 +192,29 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val META_VIEW_PACKAGE = "com.facebook.stella"
-        private const val YOU_SPEAK_MARKER = "play translation for you speak"
-        private const val OUTGOING_CENTER_THRESHOLD = 0.58
-        private const val BOTTOM_NAVIGATION_THRESHOLD = 0.88
+        private const val PLAY_TRANSLATION_PREFIX = "play translation for "
         private const val DUPLICATE_WINDOW_MS = 30_000L
-        private const val MAX_DIAGNOSTIC_NODES = 50
+        private const val MAX_DIAGNOSTIC_NODES = 60
+
         private val UI_LABELS = setOf(
             "live translation", "history", "settings", "pause", "resume", "end",
             "microphone", "english", "spanish", "copy", "share", "back", "close",
             "start", "stop", "cancel", "done", "more options", "you speak",
-            "they speak", "play translation"
+            "they speak", "play translation", "good translation", "bad translation",
+            "delete language", "using downloaded languages"
+        )
+
+        private val SPANISH_STRONG_CHARS = listOf("¿", "¡", "ñ", "á", "é", "í", "ó", "ú")
+        private val SPANISH_WORDS = setOf(
+            "a", "al", "aquí", "como", "con", "donde", "dónde", "el", "ella", "en",
+            "es", "esta", "está", "estoy", "gracias", "hola", "la", "las", "lo",
+            "los", "me", "mi", "no", "para", "por", "que", "qué", "se", "sí",
+            "soy", "su", "te", "tengo", "tu", "un", "una", "y", "yo"
+        )
+        private val ENGLISH_WORDS = setOf(
+            "a", "again", "am", "are", "can", "do", "for", "from", "hello", "here",
+            "how", "i", "in", "is", "it", "me", "my", "of", "please", "thank",
+            "that", "the", "this", "to", "we", "what", "where", "with", "you"
         )
     }
 
@@ -176,5 +226,6 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
         val fromDescription: Boolean
     )
 
+    private data class TranslationPair(val original: String, val translation: String)
     private data class InspectionResult(val candidate: String?, val diagnostics: String)
 }
