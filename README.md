@@ -19,10 +19,9 @@ does not speak the other person's incoming translation.
 
 ## Important test status
 
-Version 0.2.0 is a diagnostic field-test build. Meta does not provide a public
+Version 0.4.0 uses the Fold 7 diagnostic structure to pair each Meta play marker with its original and translated sentences. Meta does not provide a public
 live-translation API,
-so the helper uses Android Accessibility and currently identifies James's speech as
-the newest text on the right side of the Meta conversation screen. The first Fold 7
+so the helper uses Android Accessibility and identifies James's English speech and the Spanish translation paired beneath it. The first Fold 7
 test will confirm:
 
 - Meta View's package is `com.facebook.stella`
