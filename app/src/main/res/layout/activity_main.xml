@@ -20,7 +20,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Version 0.3.0"
+            android:text="Version 0.4.0"
             android:textSize="14sp" />
 
         <TextView
@@ -88,7 +88,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
-            android:text="Keep Meta Live Translation open. Version 0.3.0 detects the “Play translation for You speak” entry, skips your original sentence, and speaks only its translated sentence through the phone speaker."
+            android:text="Keep Meta Live Translation open. Version 0.4.0 pairs Meta’s actual “Play translation for &lt;original sentence&gt;” entry with the Spanish sentence below it and speaks only your translation through the phone speaker."
             android:textSize="15sp" />
     </LinearLayout>
 </ScrollView>
