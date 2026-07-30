@@ -28,6 +28,21 @@ class MainActivity : AppCompatActivity() {
         binding.testButton.setOnClickListener {
             speaker.speak("Hola, buenos días. Esta es una prueba.")
         }
+        binding.clearButton.setOnClickListener {
+            Preferences.clearLastSpoken(this)
+            Preferences.setDiagnostics(this, "")
+            refreshResults()
+        }
+        binding.copyDiagnosticsButton.setOnClickListener {
+            val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+            clipboard.setPrimaryClip(
+                android.content.ClipData.newPlainText(
+                    "Meta translation diagnostics",
+                    Preferences.diagnostics(this)
+                )
+            )
+            binding.copyDiagnosticsButton.text = "Diagnostics Copied"
+        }
     }
 
     override fun onResume() {
@@ -35,9 +50,17 @@ class MainActivity : AppCompatActivity() {
         val enabled = isServiceEnabled()
         binding.statusText.text =
             if (enabled) "Accessibility service is ON" else "Accessibility service is OFF"
+        refreshResults()
+    }
+
+    private fun refreshResults() {
         val last = Preferences.lastSpoken(this)
         binding.lastSpokenText.text =
             if (last.isBlank()) "Last spoken: none" else "Last spoken: $last"
+        val diagnostics = Preferences.diagnostics(this)
+        binding.diagnosticsText.text =
+            if (diagnostics.isBlank()) "Diagnostics: open Meta Live Translation and speak once."
+            else diagnostics
     }
 
     private fun isServiceEnabled(): Boolean {
