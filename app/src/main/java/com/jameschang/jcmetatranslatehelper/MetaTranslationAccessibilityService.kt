@@ -29,7 +29,6 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
 
         if (!Preferences.isSpeakEnabled(this)) return
         val candidate = result.candidate ?: return
-
         val normalized = normalize(candidate)
         if (isDuplicate(normalized)) return
 
@@ -40,17 +39,16 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
     }
 
     /**
-     * Finds the newest speakable text on James's outgoing (right-hand) side.
-     * Filtering happens before choosing the lowest node so a bottom navigation label
-     * such as "History" cannot hide the real translated sentence above it.
+     * Meta View exposes each outgoing entry in this order:
+     * "Play translation for You speak", the original sentence, then its translation.
+     * Use that semantic marker instead of guessing from left/right screen position.
      */
     private fun inspectTranslationScreen(
         root: AccessibilityNodeInfo,
         screenWidth: Int,
         screenHeight: Int
     ): InspectionResult {
-        val candidates = mutableListOf<Candidate>()
-        val visibleNodes = mutableListOf<String>()
+        val nodes = mutableListOf<NodeRecord>()
 
         fun walk(node: AccessibilityNodeInfo) {
             val nodeText = node.text?.toString().orEmpty()
@@ -59,44 +57,79 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
             if (text.isNotEmpty()) {
                 val bounds = Rect()
                 node.getBoundsInScreen(bounds)
-                val centerX = bounds.centerX()
-                val isOutgoing = centerX > screenWidth * OUTGOING_CENTER_THRESHOLD
-                val isBottomNavigation = bounds.top > screenHeight * BOTTOM_NAVIGATION_THRESHOLD
                 val isControl = node.isClickable || node.isCheckable ||
                     node.className?.toString()?.contains("Button", ignoreCase = true) == true
-
-                visibleNodes += buildString {
-                    append(if (isOutgoing) "R" else "L")
-                    append(" [${bounds.left},${bounds.top},${bounds.right},${bounds.bottom}] ")
-                    append(text.take(160))
-                    node.viewIdResourceName?.let { append(" id=").append(it) }
-                    if (description.isNotBlank()) append(" desc")
-                    if (isControl) append(" control")
-                }
-
-                if (isOutgoing && !isBottomNavigation && !isControl && looksSpeakable(text)) {
-                    candidates += Candidate(bounds.bottom, text)
-                }
+                nodes += NodeRecord(
+                    order = nodes.size,
+                    bounds = bounds,
+                    text = text,
+                    isControl = isControl,
+                    fromDescription = nodeText.isBlank() && description.isNotBlank()
+                )
             }
-
             for (index in 0 until node.childCount) {
                 node.getChild(index)?.let(::walk)
             }
         }
 
         walk(root)
-        val selected = candidates.maxByOrNull { it.bottom }?.text
+
+        val marker = nodes.lastOrNull { isYouSpeakMarker(it.text) }
+        val semanticTexts = marker?.let { newestMarker ->
+            nodes.asSequence()
+                .filter { it.order > newestMarker.order }
+                .filterNot { it.isControl }
+                .map { it.text }
+                .filter(::looksSpeakable)
+                .filterNot(::isYouSpeakMarker)
+                .distinct()
+                .take(2)
+                .toList()
+        }.orEmpty()
+
+        // The first sentence after the marker is what James said; the second is
+        // Meta's translated sentence. Do not speak when both are not available.
+        val semanticSelection = semanticTexts.getOrNull(1)
+        val fallbackSelection = if (marker == null) {
+            nodes.asSequence()
+                .filter { it.bounds.centerX() > screenWidth * OUTGOING_CENTER_THRESHOLD }
+                .filter { it.bounds.top <= screenHeight * BOTTOM_NAVIGATION_THRESHOLD }
+                .filterNot { it.isControl }
+                .filter { looksSpeakable(it.text) }
+                .maxByOrNull { it.bounds.bottom }
+                ?.text
+        } else {
+            null
+        }
+        val selected = semanticSelection ?: fallbackSelection
+
         val diagnostics = buildString {
-            appendLine("Version 0.2.0")
+            appendLine("Version 0.3.0")
+            appendLine("You-speak marker: ${marker?.text ?: "none"}")
+            appendLine("After marker: ${semanticTexts.joinToString(" | ").ifBlank { "none" }}")
             appendLine("Selected: ${selected ?: "none"}")
-            appendLine("Screen: ${screenWidth}x$screenHeight")
-            visibleNodes.takeLast(MAX_DIAGNOSTIC_NODES).forEach(::appendLine)
+            appendLine("Screen: ${screenWidth}x${screenHeight}")
+            nodes.takeLast(MAX_DIAGNOSTIC_NODES).forEach { item ->
+                append(if (isYouSpeakMarker(item.text)) "MARKER" else "NODE")
+                append(" [${item.bounds.left},${item.bounds.top},${item.bounds.right},${item.bounds.bottom}] ")
+                append(item.text.take(160))
+                if (item.fromDescription) append(" desc")
+                if (item.isControl) append(" control")
+                appendLine()
+            }
         }.trim()
+
         return InspectionResult(selected, diagnostics)
     }
 
     private fun normalize(text: String): String =
         text.trim().replace(Regex("\\s+"), " ")
+
+    private fun isYouSpeakMarker(text: String): Boolean {
+        val lower = normalize(text).lowercase()
+        return lower.contains(YOU_SPEAK_MARKER) ||
+            (lower.contains("play translation") && lower.contains("you speak"))
+    }
 
     private fun looksSpeakable(text: String): Boolean {
         if (text.length < 2 || text.length > 500) return false
@@ -122,17 +155,26 @@ class MetaTranslationAccessibilityService : AccessibilityService() {
 
     companion object {
         private const val META_VIEW_PACKAGE = "com.facebook.stella"
+        private const val YOU_SPEAK_MARKER = "play translation for you speak"
         private const val OUTGOING_CENTER_THRESHOLD = 0.58
         private const val BOTTOM_NAVIGATION_THRESHOLD = 0.88
         private const val DUPLICATE_WINDOW_MS = 30_000L
-        private const val MAX_DIAGNOSTIC_NODES = 40
+        private const val MAX_DIAGNOSTIC_NODES = 50
         private val UI_LABELS = setOf(
             "live translation", "history", "settings", "pause", "resume", "end",
             "microphone", "english", "spanish", "copy", "share", "back", "close",
-            "start", "stop", "cancel", "done", "more options"
+            "start", "stop", "cancel", "done", "more options", "you speak",
+            "they speak", "play translation"
         )
     }
 
-    private data class Candidate(val bottom: Int, val text: String)
+    private data class NodeRecord(
+        val order: Int,
+        val bounds: Rect,
+        val text: String,
+        val isControl: Boolean,
+        val fromDescription: Boolean
+    )
+
     private data class InspectionResult(val candidate: String?, val diagnostics: String)
 }
