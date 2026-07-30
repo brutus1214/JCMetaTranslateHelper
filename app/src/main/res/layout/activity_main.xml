@@ -20,7 +20,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
-            android:text="Version 0.2.0"
+            android:text="Version 0.3.0"
             android:textSize="14sp" />
 
         <TextView
@@ -88,7 +88,7 @@
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
             android:layout_marginTop="24dp"
-            android:text="First test: keep the Meta AI live-translation screen open. The helper looks for a new translated message on your side of the conversation and does not speak the other person’s side."
+            android:text="Keep Meta Live Translation open. Version 0.3.0 detects the “Play translation for You speak” entry, skips your original sentence, and speaks only its translated sentence through the phone speaker."
             android:textSize="15sp" />
     </LinearLayout>
 </ScrollView>
