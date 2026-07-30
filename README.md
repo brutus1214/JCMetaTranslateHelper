@@ -19,7 +19,8 @@ does not speak the other person's incoming translation.
 
 ## Important test status
 
-Version 0.1 is a field-test build. Meta does not provide a public live-translation API,
+Version 0.2.0 is a diagnostic field-test build. Meta does not provide a public
+live-translation API,
 so the helper uses Android Accessibility and currently identifies James's speech as
 the newest text on the right side of the Meta conversation screen. The first Fold 7
 test will confirm:
@@ -31,3 +32,8 @@ test will confirm:
 
 No microphone recording, network upload, account credential, or conversation history
 is included.
+
+If automatic speech does not trigger, return to the helper, tap **Copy Translation
+Diagnostics**, and share the copied text. It contains only the visible accessibility
+labels and screen positions reported by Meta View; it lets the detector be matched to
+the Fold 7's actual Meta layout instead of guessing.
